@@ -6,7 +6,7 @@ from src.main import app
 API_KEY = os.getenv("API_KEY", "secret-key")
 
 
-async def test_simple_event():
+async def _test_simple_event():
     payload = {
         "sessionId": "local-test-1",
         "message": {
@@ -30,4 +30,4 @@ async def test_simple_event():
 
 
 if __name__ == '__main__':
-    asyncio.run(test_simple_event())
+    asyncio.run(_test_simple_event())
