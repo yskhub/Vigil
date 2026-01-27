@@ -1,11 +1,19 @@
 import os
 import time
+import threading
 from typing import List
 
+# Load initial keys from environment. We support dynamic reload by
+# re-reading the env var when `check_api_key` is called and updating the
+# in-memory set when it changes.
 API_KEY_ENV = os.getenv("API_KEYS", os.getenv("API_KEY", "secret-key"))
+_cached_env_str = API_KEY_ENV
 LOCAL_KEYS = set(k.strip() for k in API_KEY_ENV.split(",") if k.strip())
 RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
 REDIS_URL = os.getenv("REDIS_URL")
+
+# lock protecting LOCAL_KEYS/_cached_env_str updates
+_keys_lock = threading.Lock()
 
 try:
     import redis
@@ -14,11 +22,12 @@ except Exception:
     redis_sync = None
 
 
-def _populate_redis_keys():
+def _populate_redis_keys(keys=None):
     if redis_sync is None:
         return
     try:
-        for k in LOCAL_KEYS:
+        target = keys if keys is not None else LOCAL_KEYS
+        for k in target:
             redis_sync.sadd("api_keys", k)
     except Exception:
         pass
@@ -27,6 +36,23 @@ def _populate_redis_keys():
 def check_api_key(key: str) -> bool:
     if not key:
         return False
+    # refresh keys from env if changed
+    try:
+        env_now = os.getenv("API_KEYS", os.getenv("API_KEY", "secret-key"))
+        global _cached_env_str
+        if env_now != _cached_env_str:
+            with _keys_lock:
+                # re-check inside lock
+                if env_now != _cached_env_str:
+                    _cached_env_str = env_now
+                    new_keys = set(k.strip() for k in env_now.split(",") if k.strip())
+                    LOCAL_KEYS.clear()
+                    LOCAL_KEYS.update(new_keys)
+                    # propagate to redis if present
+                    _populate_redis_keys(new_keys)
+    except Exception:
+        pass
+
     if redis_sync is not None:
         try:
             if redis_sync.sismember("api_keys", key):
