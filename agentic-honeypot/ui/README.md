@@ -1,3 +1,17 @@
+# Agentic Honeypot UI
+
+Minimal Streamlit demo for sending test events to the backend.
+
+Run locally (from repo root, with your virtualenv activated):
+
+```powershell
+pushd agentic-honeypot/ui
+pip install streamlit requests
+streamlit run app.py
+popd
+```
+
+Fill `Backend base URL` (example: `https://your-backend.example.com`) and `x-api-key`, then click `Send message`.
 Agentic Honey-Pot — Static UI
 
 This is a minimal static demo UI that can be hosted on GitHub Pages.

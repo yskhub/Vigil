@@ -12,6 +12,17 @@ from .agent import AgentOrchestrator
 from .callback_worker import send_final_callback
 from .auto_finalizer import start_background_loop
 from .auth import check_api_key, rate_limit_ok
+from .auth import set_api_keys
+from prometheus_client import make_asgi_app, Counter, Summary
+import time
+import logging
+
+# configure structured logging
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("agentic-honeypot")
 
 
 @asynccontextmanager
@@ -31,6 +42,29 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Agentic Honey-Pot Prototype", lifespan=lifespan)
 
+# Prometheus metrics
+REQUESTS = Counter("honeypot_requests_total", "Total requests", ["endpoint", "method", "status"])
+LATENCY = Summary("honeypot_request_latency_seconds", "Request latency in seconds")
+
+# mount metrics endpoint
+app.mount("/metrics", make_asgi_app())
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    try:
+        resp = await call_next(request)
+        status = str(resp.status_code)
+    except Exception:
+        status = "500"
+        raise
+    finally:
+        elapsed = time.perf_counter() - start
+        LATENCY.observe(elapsed)
+        REQUESTS.labels(endpoint=request.url.path, method=request.method, status=status).inc()
+    return resp
+
 API_KEY = os.getenv("BACKEND_API_KEY", os.getenv("API_KEY", "secret-key"))
 API_KEYS = None
 
@@ -42,7 +76,7 @@ agent = AgentOrchestrator()
 class Message(BaseModel):
     sender: str
     text: str
-    timestamp: datetime
+    timestamp: Optional[datetime] = None
 
 
 class Event(BaseModel):
@@ -50,6 +84,11 @@ class Event(BaseModel):
     message: Message
     conversationHistory: List[Dict[str, Any]] = []
     metadata: Dict[str, Any] = {}
+
+
+class RotateKeysBody(BaseModel):
+    keys: List[str]
+
 
 # Simple rule-based detector
 SCAM_KEYWORDS = [
@@ -91,6 +130,10 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail="Unauthorized: invalid x-api-key")
     if not rate_limit_ok(x_api_key):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    # Ensure incoming message has a timestamp; default to now if missing/empty
+    if event.message.timestamp is None:
+        event.message.timestamp = datetime.utcnow()
 
     # Combine latest message + conversation history for extraction
     all_texts = []
@@ -162,6 +205,44 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness probe: returns 200 if core dependencies are available.
+
+    Checks Redis connectivity if the session store was configured to use Redis.
+    """
+    redis_status = True
+    try:
+        use_redis = getattr(session_store, "_use_redis", False)
+        if use_redis:
+            r = getattr(session_store, "_r", None)
+            if r is None:
+                redis_status = False
+            else:
+                try:
+                    pong = await r.ping()
+                    redis_status = bool(pong)
+                except Exception:
+                    redis_status = False
+    except Exception:
+        redis_status = False
+
+    if not redis_status:
+        return {"status": "not ready", "redis": False}
+    return {"status": "ready", "redis": True}
+
+
+@app.post("/admin/rotate-keys")
+async def rotate_keys(body: RotateKeysBody, x_api_key: Optional[str] = Header(None)):
+    # Only allow if caller presents a valid API key
+    if x_api_key is None or not check_api_key(x_api_key):
+        raise HTTPException(status_code=401, detail="Unauthorized: invalid x-api-key")
+    ok = set_api_keys(body.keys)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to set keys")
+    return {"status": "ok", "keys_count": len(body.keys)}
 
 
 @app.post("/sessions/{session_id}/finalize")

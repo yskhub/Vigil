@@ -93,3 +93,26 @@ def rate_limit_ok(key: str) -> bool:
 
 # populate keys into redis if available
 _populate_redis_keys()
+
+
+def set_api_keys(keys: List[str]) -> bool:
+    """Replace in-memory API key set with `keys` and propagate to redis.
+
+    This updates the process-local `LOCAL_KEYS`, updates the cached env
+    string, writes to `os.environ["API_KEYS"]` (so other tooling can read it),
+    and populates Redis if available. Returns True on success.
+    """
+    try:
+        new_set = set(k.strip() for k in keys if k and k.strip())
+        with _keys_lock:
+            LOCAL_KEYS.clear()
+            LOCAL_KEYS.update(new_set)
+            global _cached_env_str
+            _cached_env_str = ",".join(sorted(new_set))
+            # update env for visibility (process-level only)
+            os.environ["API_KEYS"] = _cached_env_str
+            # push to redis
+            _populate_redis_keys(new_set)
+        return True
+    except Exception:
+        return False

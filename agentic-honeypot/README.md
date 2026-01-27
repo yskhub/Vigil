@@ -1,3 +1,16 @@
+# Agentic Honeypot — Hackathon PRD Implementation
+
+This workspace contains a prototype implementation for the "Agentic Honey-Pot for Scam Detection & Intelligence Extraction" PRD. It includes a FastAPI backend, optional agent integrations (mock/OpenAI/local LLM), Redis-capable session store with in-memory fallback, auto-finalizer, callback worker, tests, and a Streamlit demo UI.
+
+Quick start (development):
+
+- Create and activate a Python 3.11+ virtualenv.
+- pip install -r src/requirements.txt
+- (Optional) pip install -r ui/requirements-streamlit.txt for the Streamlit UI.
+- Run the API: `uvicorn src.main:app --reload --port 8000`
+- Open `ui/streamlit_app.py` with Streamlit: `streamlit run ui/streamlit_app.py`
+
+See docs/ for deployment and optional local-LLM instructions.
 # Agentic Honey-Pot — Project Scaffold
 
 This folder contains phase-by-phase documentation to build the Agentic Honey-Pot for the hackathon.

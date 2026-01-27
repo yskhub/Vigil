@@ -18,6 +18,23 @@ payload = {
 
 headers = {"Content-Type": "application/json", "x-api-key": API_KEY}
 
-r = requests.post(API_URL, json=payload, headers=headers, timeout=5)
-print("status", r.status_code)
-print(r.json())
+
+def main():
+    """Send a test event to the running backend. Not executed on import.
+
+    Run as a script: `python -m agentic_honeypot.src.test_client` or
+    `python agentic-honeypot/src/test_client.py` from repo root.
+    """
+    try:
+        r = requests.post(API_URL, json=payload, headers=headers, timeout=5)
+        print("status", r.status_code)
+        try:
+            print(r.json())
+        except Exception:
+            print(r.text)
+    except requests.exceptions.RequestException as e:
+        print("request failed:", e)
+
+
+if __name__ == "__main__":
+    main()

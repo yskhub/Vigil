@@ -1,0 +1,59 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f agentic-honeypot/requirements-dev.txt ]; then
+            pip install -r agentic-honeypot/requirements-dev.txt
+          else
+            pip install pytest pytest-asyncio httpx uvicorn[standard] redis
+          fi
+          pip install -e ./agentic-honeypot
+
+      - name: Start uvicorn
+        run: |
+          export PYTHONPATH=agentic-honeypot/src
+          export REDIS_URL=redis://127.0.0.1:6379/0
+          nohup python -m uvicorn src.main:app --host 127.0.0.1 --port 8000 --log-level info > uvicorn.out 2>&1 &
+
+      - name: Wait for /health
+        run: |
+          for i in {1..30}; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || true)
+            if [ "$status" = "200" ]; then
+              echo "health ok"
+              exit 0
+            fi
+            echo "waiting for server... ($i)"
+            sleep 1
+          done
+          echo "server did not start"; cat uvicorn.out; exit 1
+
+      - name: Run tests
+        env:
+          PYTHONPATH: agentic-honeypot/src
+        run: |
+          python -m pytest -q agentic-honeypot/src/tests -rA
