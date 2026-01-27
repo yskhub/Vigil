@@ -220,18 +220,9 @@ async def get_session(session_id: str, x_api_key: Optional[str] = Header(None)):
     return {"status": "success", "sessionId": session_id, "history": history, "extractedIntelligence": extracted, "finalized": finalized}
 
 
-@app.on_event("startup")
-async def on_startup():
-    # start auto-finalizer background task (free-mode)
-    loop = asyncio.get_event_loop()
-    global _finalizer_stop, _finalizer_task
-    _finalizer_stop, _finalizer_task = start_background_loop(loop)
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    global _finalizer_stop, _finalizer_task
-    if _finalizer_stop and _finalizer_task:
-        _finalizer_stop.set()
-        await _finalizer_task
+# Lifespan handler above already starts and stops the auto-finalizer.
+# The older `@app.on_event` startup/shutdown handlers were removed to
+# avoid DeprecationWarning and to consolidate lifecycle management
+# via the `lifespan` async context manager defined at the top of this
+# module.
 
