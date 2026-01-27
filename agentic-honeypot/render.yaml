@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: agentic-honeypot-api
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r agentic-honeypot/src/requirements.txt
+    startCommand: uvicorn src.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: API_KEY
+        fromSecret: API_KEY
+      - key: REDIS_URL
+        fromSecret: REDIS_URL
+      - key: LLM_PROVIDER
+        value: mock
+    healthCheckPath: /health
