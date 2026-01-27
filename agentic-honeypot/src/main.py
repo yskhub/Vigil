@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Agentic Honey-Pot Prototype", lifespan=lifespan)
 
-API_KEY = os.getenv("API_KEY", "secret-key")
+API_KEY = os.getenv("BACKEND_API_KEY", os.getenv("API_KEY", "secret-key"))
 API_KEYS = None
 
 # init services
