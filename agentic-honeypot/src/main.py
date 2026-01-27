@@ -4,21 +4,37 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 import os
 import re
+import asyncio
+from contextlib import asynccontextmanager
 
 from session_store import SessionStore
 from agent import AgentOrchestrator
 from callback_worker import send_final_callback
 from auto_finalizer import start_background_loop
 
-app = FastAPI(title="Agentic Honey-Pot Prototype")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # start auto-finalizer background task (free-mode)
+    loop = asyncio.get_event_loop()
+    stop_event, task = start_background_loop(loop)
+    try:
+        yield
+    finally:
+        stop_event.set()
+        try:
+            await task
+        except Exception:
+            pass
+
+
+app = FastAPI(title="Agentic Honey-Pot Prototype", lifespan=lifespan)
 
 API_KEY = os.getenv("API_KEY", "secret-key")
 
 # init services
 session_store = SessionStore()
 agent = AgentOrchestrator()
-_finalizer_stop = None
-_finalizer_task = None
 
 # Request models
 class Message(BaseModel):
