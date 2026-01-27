@@ -7,11 +7,19 @@ import re
 import asyncio
 from contextlib import asynccontextmanager
 
-from .session_store import SessionStore
-from .agent import AgentOrchestrator
-from .callback_worker import send_final_callback
-from .auto_finalizer import start_background_loop
-from .auth import check_api_key, rate_limit_ok
+try:
+    from .session_store import SessionStore
+    from .agent import AgentOrchestrator
+    from .callback_worker import send_final_callback
+    from .auto_finalizer import start_background_loop
+    from .auth import check_api_key, rate_limit_ok
+except Exception:
+    # allow running as a top-level module during local tests
+    from session_store import SessionStore  # type: ignore
+    from agent import AgentOrchestrator  # type: ignore
+    from callback_worker import send_final_callback  # type: ignore
+    from auto_finalizer import start_background_loop  # type: ignore
+    from auth import check_api_key, rate_limit_ok  # type: ignore
 
 
 @asynccontextmanager

@@ -1,8 +1,13 @@
 import asyncio
 import os
 from typing import Any
-from session_store import SessionStore
-from callback_worker import send_final_callback
+try:
+    from .session_store import SessionStore
+    from .callback_worker import send_final_callback
+except Exception:
+    # support being imported as a top-level module during local tests
+    from session_store import SessionStore  # type: ignore
+    from callback_worker import send_final_callback  # type: ignore
 
 POLL_INTERVAL = float(os.getenv("AUTO_FINALIZE_POLL_INTERVAL", "10"))
 MIN_MESSAGES_TO_FINALIZE = int(os.getenv("MIN_MESSAGES_TO_FINALIZE", "5"))
