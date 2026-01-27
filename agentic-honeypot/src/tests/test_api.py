@@ -7,8 +7,8 @@ from httpx import ASGITransport
 
 # ensure src directory is importable
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from main import app
-import main as main_module
+from src.main import app
+import src.main as main_module
 
 API_KEY = os.getenv("API_KEY", "secret-key")
 

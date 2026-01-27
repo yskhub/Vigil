@@ -1,7 +1,7 @@
 import os
 import asyncio
 import httpx
-from main import app
+from src.main import app
 
 API_KEY = os.getenv("API_KEY", "secret-key")
 
