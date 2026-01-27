@@ -11,6 +11,7 @@ from session_store import SessionStore
 from agent import AgentOrchestrator
 from callback_worker import send_final_callback
 from auto_finalizer import start_background_loop
+from auth import check_api_key, rate_limit_ok
 
 
 @asynccontextmanager
@@ -31,29 +32,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Agentic Honey-Pot Prototype", lifespan=lifespan)
 
 API_KEY = os.getenv("API_KEY", "secret-key")
-API_KEYS = [k.strip() for k in os.getenv("API_KEYS", API_KEY).split(",") if k.strip()]
-
-# simple in-memory rate limiter: {api_key: {window_start: timestamp, count: int}}
-rate_table = {}
-RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
-
-
-def check_api_key(key: Optional[str]) -> bool:
-    return key in API_KEYS
-
-
-def rate_limit_ok(key: str) -> bool:
-    import time
-    now = int(time.time())
-    window = now // 60
-    st = rate_table.setdefault(key, {})
-    if st.get("window") != window:
-        st["window"] = window
-        st["count"] = 0
-    if st["count"] >= RATE_LIMIT:
-        return False
-    st["count"] += 1
-    return True
+API_KEYS = None
 
 # init services
 session_store = SessionStore()

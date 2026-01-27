@@ -27,9 +27,17 @@
     <textarea id="message">Your bank account will be blocked today. Verify immediately. Share your UPI ID: scammer@upi</textarea>
 
     <button id="send">Send</button>
+    <button id="list">List Sessions</button>
 
     <h3>Response</h3>
     <pre id="response">(no response yet)</pre>
+    <h3>Sessions</h3>
+    <div>
+      <button id="refresh-sessions">Refresh Sessions</button>
+      <ul id="sessions-list"></ul>
+    </div>
+    <h3>Session Details</h3>
+    <pre id="session-detail">(none selected)</pre>
 
     <script>
       document.getElementById('send').addEventListener('click', async () => {
@@ -55,10 +63,48 @@
           });
           const j = await r.json();
           resEl.textContent = JSON.stringify(j, null, 2);
+          // after sending, refresh sessions
+          loadSessions();
         } catch (e) {
           resEl.textContent = String(e);
         }
       });
+
+      async function loadSessions(){
+        const apiBase = document.getElementById('apiUrl').value.replace(/\/events\/?$/, "");
+        const apiKey = document.getElementById('apiKey').value;
+        const listEl = document.getElementById('sessions-list');
+        listEl.innerHTML = 'Loading...';
+        try{
+          const r = await fetch(apiBase + '/sessions', { headers: { 'x-api-key': apiKey } });
+          const j = await r.json();
+          if(j.status !== 'success') { listEl.textContent = JSON.stringify(j); return }
+          listEl.innerHTML = '';
+          j.sessions.forEach(s => {
+            const li = document.createElement('li');
+            const btn = document.createElement('button');
+            btn.textContent = s.sessionId + ' (' + s.totalMessages + ')';
+            btn.onclick = () => loadSessionDetail(s.sessionId);
+            li.appendChild(btn);
+            listEl.appendChild(li);
+          });
+        }catch(e){ listEl.textContent = String(e) }
+      }
+
+      async function loadSessionDetail(id){
+        const apiBase = document.getElementById('apiUrl').value.replace(/\/events\/?$/, "");
+        const apiKey = document.getElementById('apiKey').value;
+        const det = document.getElementById('session-detail');
+        det.textContent = 'Loading...';
+        try{
+          const r = await fetch(apiBase + '/sessions/' + encodeURIComponent(id), { headers: { 'x-api-key': apiKey } });
+          const j = await r.json();
+          det.textContent = JSON.stringify(j, null, 2);
+        }catch(e){ det.textContent = String(e) }
+      }
+
+      document.getElementById('refresh-sessions').addEventListener('click', loadSessions);
+      document.getElementById('list').addEventListener('click', loadSessions);
     </script>
   </body>
 </html>
