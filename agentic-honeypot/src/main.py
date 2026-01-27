@@ -8,6 +8,7 @@ import re
 from session_store import SessionStore
 from agent import AgentOrchestrator
 from callback_worker import send_final_callback
+from auto_finalizer import start_background_loop
 
 app = FastAPI(title="Agentic Honey-Pot Prototype")
 
@@ -16,6 +17,8 @@ API_KEY = os.getenv("API_KEY", "secret-key")
 # init services
 session_store = SessionStore()
 agent = AgentOrchestrator()
+_finalizer_stop = None
+_finalizer_task = None
 
 # Request models
 class Message(BaseModel):
@@ -165,4 +168,20 @@ async def finalize_session(session_id: str, body: Dict[str, Any], x_api_key: Opt
 
     result = await send_final_callback(payload)
     return {"status": "callback_attempted", "result": result}
+
+
+@app.on_event("startup")
+async def on_startup():
+    # start auto-finalizer background task (free-mode)
+    loop = asyncio.get_event_loop()
+    global _finalizer_stop, _finalizer_task
+    _finalizer_stop, _finalizer_task = start_background_loop(loop)
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    global _finalizer_stop, _finalizer_task
+    if _finalizer_stop and _finalizer_task:
+        _finalizer_stop.set()
+        await _finalizer_task
 
