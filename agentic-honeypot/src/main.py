@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -31,6 +31,29 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Agentic Honey-Pot Prototype", lifespan=lifespan)
 
 API_KEY = os.getenv("API_KEY", "secret-key")
+API_KEYS = [k.strip() for k in os.getenv("API_KEYS", API_KEY).split(",") if k.strip()]
+
+# simple in-memory rate limiter: {api_key: {window_start: timestamp, count: int}}
+rate_table = {}
+RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
+
+
+def check_api_key(key: Optional[str]) -> bool:
+    return key in API_KEYS
+
+
+def rate_limit_ok(key: str) -> bool:
+    import time
+    now = int(time.time())
+    window = now // 60
+    st = rate_table.setdefault(key, {})
+    if st.get("window") != window:
+        st["window"] = window
+        st["count"] = 0
+    if st["count"] >= RATE_LIMIT:
+        return False
+    st["count"] += 1
+    return True
 
 # init services
 session_store = SessionStore()
@@ -85,8 +108,10 @@ def extract_from_text(text: str) -> Dict[str, List[str]]:
 @app.post("/events")
 async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
     # Auth
-    if x_api_key is None or x_api_key != API_KEY:
+    if x_api_key is None or not check_api_key(x_api_key):
         raise HTTPException(status_code=401, detail="Unauthorized: invalid x-api-key")
+    if not rate_limit_ok(x_api_key):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     # Combine latest message + conversation history for extraction
     all_texts = []
@@ -163,8 +188,10 @@ async def health():
 @app.post("/sessions/{session_id}/finalize")
 async def finalize_session(session_id: str, body: Dict[str, Any], x_api_key: Optional[str] = Header(None)):
     # Auth
-    if x_api_key is None or x_api_key != API_KEY:
+    if x_api_key is None or not check_api_key(x_api_key):
         raise HTTPException(status_code=401, detail="Unauthorized: invalid x-api-key")
+    if not rate_limit_ok(x_api_key):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     scam_detected = bool(body.get("scamDetected", False))
     if not scam_detected:
@@ -184,6 +211,34 @@ async def finalize_session(session_id: str, body: Dict[str, Any], x_api_key: Opt
 
     result = await send_final_callback(payload)
     return {"status": "callback_attempted", "result": result}
+
+
+@app.get("/sessions")
+async def list_sessions_endpoint(x_api_key: Optional[str] = Header(None)):
+    if x_api_key is None or not check_api_key(x_api_key):
+        raise HTTPException(status_code=401, detail="Unauthorized: invalid x-api-key")
+    if not rate_limit_ok(x_api_key):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    sessions = await session_store.list_sessions()
+    out = []
+    for s in sessions:
+        extracted = await session_store.get_extracted(s)
+        total = await session_store.get_total_messages(s)
+        last = await session_store.get_last_seen(s)
+        out.append({"sessionId": s, "totalMessages": total, "lastSeen": last, "extractedCount": sum(len(v) for v in extracted.values() if isinstance(v, list))})
+    return {"status": "success", "sessions": out}
+
+
+@app.get("/sessions/{session_id}")
+async def get_session(session_id: str, x_api_key: Optional[str] = Header(None)):
+    if x_api_key is None or not check_api_key(x_api_key):
+        raise HTTPException(status_code=401, detail="Unauthorized: invalid x-api-key")
+    if not rate_limit_ok(x_api_key):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    history = await session_store.get_history(session_id)
+    extracted = await session_store.get_extracted(session_id)
+    finalized = await session_store.is_finalized(session_id)
+    return {"status": "success", "sessionId": session_id, "history": history, "extractedIntelligence": extracted, "finalized": finalized}
 
 
 @app.on_event("startup")

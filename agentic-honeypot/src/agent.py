@@ -9,6 +9,13 @@ try:
     import openai
 except Exception:
     openai = None
+try:
+    # optional local LLM via transformers
+    from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+    transformers_available = True
+except Exception:
+    pipeline = None
+    transformers_available = False
 
 
 class AgentOrchestrator:
@@ -47,11 +54,26 @@ class AgentOrchestrator:
         return text
 
     async def generate_reply(self, session_id: str, conversation: List[Dict[str, Any]], metadata: Dict[str, Any]) -> Dict[str, Any]:
+        # If configured, prefer a local transformers model
+        provider = os.getenv("LLM_PROVIDER", "mock")
+        reply_text = None
+        if provider == "local" and transformers_available:
+            # use a small causal model if available (user should configure MODEL_NAME)
+            model_name = os.getenv("LOCAL_LLM_MODEL", "gpt2")
+            try:
+                text_context = "\n".join([f"{m['sender']}: {m['text']}" for m in conversation[-6:]])
+                # construct a lightweight pipeline call in a thread
+                def gen():
+                    p = pipeline("text-generation", model=model_name)
+                    out = p(text_context + "\nAgent:", max_new_tokens=64, do_sample=True, temperature=0.7)
+                    return out[0]["generated_text"][len(text_context) + 7 :].strip()
+                reply_text = await asyncio.to_thread(gen)
+            except Exception:
+                reply_text = None
         # If OpenAI is configured, prefer using it for natural replies
         last = conversation[-1]["text"] if conversation else ""
         prompt = f"Conversation context:\n" + "\n".join([f"{m['sender']}: {m['text']}" for m in conversation[-6:]]) + f"\n\nRespond as a human who wants to ask non-leading follow-up questions to gather payment/contact info. Avoid asking the user to transfer money directly or revealing any detection."
-        reply_text = None
-        if self.llm_key and openai is not None:
+        if reply_text is None and self.llm_key and openai is not None:
             try:
                 r = await self._call_openai(prompt)
                 if r:
