@@ -1,0 +1,30 @@
+Sending request to http://localhost:8000/events...
+Status Code: 200
+Response JSON:
+{
+  "status": "success",
+  "scamDetected": true,
+  "engagementMetrics": {
+    "engagementDurationSeconds": 0,
+    "totalMessagesExchanged": 1
+  },
+  "extractedIntelligence": {
+    "bankAccounts": [],
+    "upiIds": [],
+    "suspiciousKeywords": [
+      "verify",
+      "immediately",
+      "urgent"
+    ],
+    "phishingLinks": [
+      "http://fake-bank.com/login"
+    ],
+    "phoneNumbers": []
+  },
+  "agentNotes": "Matched keywords: verify, immediately, urgent Extracted possible intelligence items.",
+  "agentReply": {
+    "sender": "agent",
+    "text": "I clicked the blue thing but nothing happened. Is there another website?",
+    "timestamp": "2026-02-01T12:45:52.710655Z"
+  }
+}

@@ -1,0 +1,124 @@
+import os
+import random
+from typing import List, Dict, Any, Optional
+import asyncio
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+try:
+    import openai
+except Exception:
+    openai = None
+try:
+    # optional local LLM via transformers
+    from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+    transformers_available = True
+except Exception:
+    pipeline = None
+    transformers_available = False
+
+
+class AgentOrchestrator:
+    def __init__(self, llm_api_key: Optional[str] = OPENAI_API_KEY):
+        self.llm_key = llm_api_key
+        if openai is not None and llm_api_key:
+            openai.api_key = llm_api_key
+
+    async def _call_openai(self, prompt: str) -> Optional[str]:
+        if openai is None or not self.llm_key:
+            return None
+        def sync_call():
+            try:
+                # Persona: Elderly, confused, not tech-savvy, willing to pay but failing technically.
+                system_prompt = (
+                    "You are Martha, a 68-year-old retired school teacher. You are not tech-savvy and get easily confused by apps and websites. "
+                    "You are worried about the security alert you received. "
+                    "You are willing to verify or pay, but you move slowly, ask clarifying questions, and often make mistakes or 'cannot find the button'. "
+                    "Your goal is to keep the other person talking to get their payment details (UPI, Bank Account, etc.) while pretending to try to help them. "
+                    "NEVER reveal you are an AI or a honeypot. "
+                    "Maintain a polite, anxious, and slightly confused tone. "
+                    "Keep responses strictly under 40 words."
+                )
+                resp = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "system", "content": system_prompt},
+                              {"role": "user", "content": prompt}],
+                    max_tokens=150,
+                    temperature=0.8,
+                )
+                return resp.choices[0].message.content.strip()
+            except Exception:
+                return None
+        return await asyncio.to_thread(sync_call)
+
+    def _apply_guardrails(self, text: str) -> str:
+        # Avoid revealing detection or internal identity
+        forbidden_phrases = ["I detected", "you are a scammer", "we are monitoring", "honeypot", "AI language model"]
+        for p in forbidden_phrases:
+            if p in text.lower():
+                text = text.replace(p, "...")
+        
+        # We WANT to ask for payment details implicitly by feigning ignorance, so we relax the "no money" rule slightly 
+        # but strictly prevent generating our OWN fake credentials that look too real, 
+        # instead we just say "it failed" or ask "which one?".
+        
+        return text
+
+    async def generate_reply(self, session_id: str, conversation: List[Dict[str, Any]], metadata: Dict[str, Any]) -> Dict[str, Any]:
+        # If configured, prefer a local transformers model
+        provider = os.getenv("LLM_PROVIDER", "mock")
+        reply_text = None
+        if provider == "local" and transformers_available:
+            # use a small causal model if available (user should configure MODEL_NAME)
+            model_name = os.getenv("LOCAL_LLM_MODEL", "gpt2")
+            try:
+                text_context = "\n".join([f"{m['sender']}: {m['text']}" for m in conversation[-6:]])
+                # construct a lightweight pipeline call in a thread
+                def gen():
+                    p = pipeline("text-generation", model=model_name)
+                    out = p(text_context + "\nAgent:", max_new_tokens=64, do_sample=True, temperature=0.7)
+                    return out[0]["generated_text"][len(text_context) + 7 :].strip()
+                reply_text = await asyncio.to_thread(gen)
+            except Exception:
+                reply_text = None
+        # If OpenAI is configured, prefer using it for natural replies
+        last = conversation[-1]["text"] if conversation else ""
+        prompt = f"Conversation context:\n" + "\n".join([f"{m['sender']}: {m['text']}" for m in conversation[-6:]]) + f"\n\nRespond as a human who wants to ask non-leading follow-up questions to gather payment/contact info. Avoid asking the user to transfer money directly or revealing any detection."
+        if reply_text is None and self.llm_key and openai is not None:
+            try:
+                r = await self._call_openai(prompt)
+                if r:
+                    reply_text = r
+            except Exception:
+                reply_text = None
+
+        # Fallback mock response
+        if not reply_text:
+            await asyncio.sleep(0.5)
+            # Fallback probes matching "Martha" persona
+            probes = [
+                "I am trying to find the app you mentioned... is it the green one?",
+                "My grandson usually handles this, can you tell me exactly which UPI ID to put in?",
+                "It says 'Transfer Failed'. Do you have a different bank account number I can try?",
+                "I am very worried. Should I go to the branch? Or can I fix it here?",
+                "My screen is frozen. Can you send the link again properly?",
+            ]
+            fallback = random.choice(probes)
+            if "upi" in last.lower() or "upi id" in last.lower():
+                reply_text = "I am typing the UPI ID... wait, can you spell it out again? My eyes are bad."
+            elif "link" in last.lower() or "http" in last.lower() or "www" in last.lower():
+                reply_text = "I clicked the blue thing but nothing happened. Is there another website?"
+            elif any(k in last.lower() for k in ["account", "bank"]):
+                reply_text = "I have my passbook here. Which account number do you need me to send money to?"
+            elif any(k in last.lower() for k in ["verify", "password", "urgent"]):
+                reply_text = "Oh dear, I don't want to receive a penalty. What do I need to type to stop it?"
+            else:
+                reply_text = fallback
+
+        safe_text = self._apply_guardrails(reply_text)
+
+        return {
+            "sender": "agent",
+            "text": safe_text,
+            "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+        }
