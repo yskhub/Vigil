@@ -1,3 +1,20 @@
-# Bytecode  
-__pycache__/  
-*.pyc 
+# Bytecode
+__pycache__/
+*.pyc
+
+# Environments
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+ci_logs/
+pytest_output.txt
+
+# Temp / Local
+tmp_*.json
+test_result.txt
+manual_test.py
+verify_compliance.py
+.DS_Store
