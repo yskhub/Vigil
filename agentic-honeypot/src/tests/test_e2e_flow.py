@@ -55,11 +55,8 @@ async def test_end_to_end_flow(monkeypatch):
         # ensure extracted intelligence contains expected types
         ext = j2.get("extractedIntelligence", {})
         assert isinstance(ext, dict)
-<<<<<<< HEAD
         assert "suspiciousKeywords" in ext
         assert len(ext["suspiciousKeywords"]) > 0
-=======
->>>>>>> fd907d84d20473d14fb47bae4909fc2de72a8749
 
         # finalize the session
         body = {"scamDetected": True, "totalMessagesExchanged": 2, "agentNotes": "auto"}
