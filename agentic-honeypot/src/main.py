@@ -82,8 +82,8 @@ class Message(BaseModel):
 class Event(BaseModel):
     sessionId: str
     message: Message
-    conversationHistory: List[Dict[str, Any]] = []
-    metadata: Dict[str, Any] = {}
+    conversationHistory: Optional[List[Dict[str, Any]]] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class RotateKeysBody(BaseModel):
@@ -161,9 +161,14 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
     # Ensure incoming message has a timestamp (handle int/float ms or s)
     event.message.timestamp = normalize_timestamp(event.message.timestamp)
 
+
+    # Safe defaults for optional fields
+    conv_history = event.conversationHistory or []
+    meta = event.metadata or {}
+
     # Combine latest message + conversation history for extraction
     all_texts = []
-    for msg in event.conversationHistory:
+    for msg in conv_history:
         txt = msg.get("text") if isinstance(msg, dict) else None
         if txt:
             all_texts.append(txt)
@@ -185,11 +190,11 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
     await session_store.set_extracted(event.sessionId, merged)
 
     # Basic engagement metrics (prototype)
-    total_messages = len(event.conversationHistory) + 1
+    total_messages = len(conv_history) + 1
     engagement_seconds = 0
     try:
         timestamps = []
-        for m in event.conversationHistory:
+        for m in conv_history:
             try:
                 t = m.get("timestamp")
                 if t:
@@ -214,11 +219,11 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
         local_history = await session_store.get_history(event.sessionId)
         
         # If local history is empty but we have provided history, hydrate it for context
-        if not local_history and event.conversationHistory:
+        if not local_history and conv_history:
              # Just use it temporarily for generating reply, don't necessarily persist old stuff to avoid duplication logic issues
              # But we need to normalize it for the agent (who expects dicts with keys)
              # The agent expects a list of dicts. event.conversationHistory IS a list of dicts.
-             local_history = event.conversationHistory
+             local_history = conv_history
 
         # Check if latest user message is already in history (idempotency check roughly)
         # Note: If we just hydrated from event.conversationHistory, it doesn't include the current message yet.
@@ -229,9 +234,9 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
         # So local_history (from get_history) has [current_message].
         # But we want PREVIOUS history too.
         
-        if len(local_history) == 1 and local_history[0]["text"] == event.message.text and event.conversationHistory:
+        if len(local_history) == 1 and local_history[0]["text"] == event.message.text and conv_history:
              # Prepend the provided history
-             full_history = event.conversationHistory + local_history
+             full_history = conv_history + local_history
         else:
              full_history = local_history
 
@@ -239,7 +244,7 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
         if not full_history:
              full_history = [{"sender": event.message.sender, "text": event.message.text, "timestamp": event.message.timestamp.isoformat()}]
 
-        agent_reply = await agent.generate_reply(event.sessionId, full_history, event.metadata)
+        agent_reply = await agent.generate_reply(event.sessionId, full_history, meta)
         # persist agent reply
         await session_store.append_message(event.sessionId, agent_reply)
 
