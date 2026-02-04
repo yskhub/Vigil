@@ -203,9 +203,9 @@ async def handle_event_wrapper(request: Request):
     print(f"DEBUG INCOMING BODY: {body}")
     
     # Delegate to internal logic
-    return await process_event_logic(body)
+    return await process_event_logic(body, x_api_key)
 
-async def process_event_logic(body: Dict[str, Any]):
+async def process_event_logic(body: Dict[str, Any], x_api_key: str):
     # Manual Extraction
     event_id = body.get("sessionId", "unknown_session")
     msg_obj = body.get("message", {})
