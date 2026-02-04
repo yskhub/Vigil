@@ -63,13 +63,18 @@ app.mount("/metrics", make_asgi_app())
 
 
 @app.middleware("http")
-async def metrics_middleware(request: Request, call_next):
+async def debug_logging_middleware(request: Request, call_next):
+    # Log the raw request details immediately
+    print(f"INCOMING REQUEST: {request.method} {request.url}")
+    # print(f"HEADERS: {dict(request.headers)}") 
+    
     start = time.perf_counter()
     try:
         resp = await call_next(request)
         status = str(resp.status_code)
-    except Exception:
+    except Exception as e:
         status = "500"
+        print(f"REQUEST CRASHED: {e}")
         raise
     finally:
         elapsed = time.perf_counter() - start
@@ -176,12 +181,14 @@ def extract_from_text(text: str) -> Dict[str, List[str]]:
     }
 
 
-@app.options("/events", include_in_schema=False)
-async def handle_options_events(request: Request):
-    return JSONResponse({"status": "ok"})
-
-@app.post("/events", include_in_schema=False)
+@app.api_route("/events", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"], include_in_schema=False)
+@app.api_route("/events/", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"], include_in_schema=False)
 async def handle_event_wrapper(request: Request):
+    
+    # If it's OPTIONS, return OK immediately
+    if request.method == "OPTIONS":
+         return JSONResponse({"status": "ok"})
+     
     """
     Wrapper to manually handle the request and ensure we catch EVERYTHING
     before FastAPI validation kicks in.
