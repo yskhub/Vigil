@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 import os
 import re
@@ -76,7 +76,7 @@ agent = AgentOrchestrator()
 class Message(BaseModel):
     sender: str
     text: str
-    timestamp: Optional[datetime] = None
+    timestamp: Optional[Union[datetime, int, float]] = None
 
 
 class Event(BaseModel):
@@ -100,6 +100,27 @@ UPI_RE = re.compile(r"\b[\w.-]{2,}@[a-zA-Z]{2,}\b")
 PHONE_RE = re.compile(r"(?:\+?\d{1,3}[\s-]?)?(?:\d{10}|\d{3}[\s-]\d{3}[\s-]\d{4})")
 URL_RE = re.compile(r"https?://[\w./?=&%-]+|www\.[\w./?=&%-]+")
 ACC_RE = re.compile(r"\b\d{6,20}\b")
+
+
+def normalize_timestamp(ts: Union[datetime, int, float, str, None]) -> datetime:
+    if ts is None:
+        return datetime.utcnow()
+    if isinstance(ts, datetime):
+        return ts
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except:
+            return datetime.utcnow()
+    if isinstance(ts, (int, float)):
+        # If > 1e11 (100 billion), assume milliseconds (Year 1973+)
+        if ts > 1e11:
+            ts = ts / 1000.0
+        try:
+            return datetime.utcfromtimestamp(ts)
+        except (ValueError, OSError):
+            return datetime.utcnow()
+    return datetime.utcnow()
 
 
 def detect_scam(text: str) -> Dict[str, Any]:
@@ -137,8 +158,8 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     # Ensure incoming message has a timestamp; default to now if missing/empty
-    if event.message.timestamp is None:
-        event.message.timestamp = datetime.utcnow()
+    # Ensure incoming message has a timestamp (handle int/float ms or s)
+    event.message.timestamp = normalize_timestamp(event.message.timestamp)
 
     # Combine latest message + conversation history for extraction
     all_texts = []
@@ -167,7 +188,14 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
     total_messages = len(event.conversationHistory) + 1
     engagement_seconds = 0
     try:
-        timestamps = [datetime.fromisoformat(m.get("timestamp")) for m in event.conversationHistory if m.get("timestamp")]
+        timestamps = []
+        for m in event.conversationHistory:
+            try:
+                t = m.get("timestamp")
+                if t:
+                    timestamps.append(normalize_timestamp(t))
+            except:
+                pass
         timestamps.append(event.message.timestamp)
         engagement_seconds = int((max(timestamps) - min(timestamps)).total_seconds()) if len(timestamps) > 1 else 0
     except Exception:
@@ -183,15 +211,41 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
     agent_reply = None
     if detection["scam"]:
         # fetch current history to pass to agent
-        history = await session_store.get_history(event.sessionId)
-        if not history or history[-1].get("text") != event.message.text:
-            history.append({"sender": event.message.sender, "text": event.message.text, "timestamp": event.message.timestamp.isoformat()})
-        agent_reply = await agent.generate_reply(event.sessionId, history, event.metadata)
+        local_history = await session_store.get_history(event.sessionId)
+        
+        # If local history is empty but we have provided history, hydrate it for context
+        if not local_history and event.conversationHistory:
+             # Just use it temporarily for generating reply, don't necessarily persist old stuff to avoid duplication logic issues
+             # But we need to normalize it for the agent (who expects dicts with keys)
+             # The agent expects a list of dicts. event.conversationHistory IS a list of dicts.
+             local_history = event.conversationHistory
+
+        # Check if latest user message is already in history (idempotency check roughly)
+        # Note: If we just hydrated from event.conversationHistory, it doesn't include the current message yet.
+        # But for local_history from store, it might include it if we just appended it? 
+        # Wait, we called await session_store.append_message above. So local_history SHOULD include the new message.
+        # BUT if hydration happened, it means session_store was empty BEFORE we appended.
+        # So now session_store has [current_message].
+        # So local_history (from get_history) has [current_message].
+        # But we want PREVIOUS history too.
+        
+        if len(local_history) == 1 and local_history[0]["text"] == event.message.text and event.conversationHistory:
+             # Prepend the provided history
+             full_history = event.conversationHistory + local_history
+        else:
+             full_history = local_history
+
+        # Fallback if somehow empty
+        if not full_history:
+             full_history = [{"sender": event.message.sender, "text": event.message.text, "timestamp": event.message.timestamp.isoformat()}]
+
+        agent_reply = await agent.generate_reply(event.sessionId, full_history, event.metadata)
         # persist agent reply
         await session_store.append_message(event.sessionId, agent_reply)
 
     response = {
         "status": "success",
+        "reply": agent_reply["text"] if agent_reply else "No conversation started.",
         "scamDetected": detection["scam"],
         "engagementMetrics": {
             "engagementDurationSeconds": engagement_seconds,
