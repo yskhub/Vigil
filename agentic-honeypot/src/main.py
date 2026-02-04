@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
@@ -42,6 +43,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Agentic Honey-Pot Prototype", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Prometheus metrics
 REQUESTS = Counter("honeypot_requests_total", "Total requests", ["endpoint", "method", "status"])
 LATENCY = Summary("honeypot_request_latency_seconds", "Request latency in seconds")
@@ -74,9 +83,10 @@ agent = AgentOrchestrator()
 
 # Request models
 class Message(BaseModel):
-    sender: str
-    text: str
-    timestamp: Optional[Union[datetime, int, float]] = None
+    # Relax validation to allow any type/missing, handle in code
+    sender: Optional[str] = "unknown"
+    text: Optional[str] = ""
+    timestamp: Optional[Union[datetime, int, float, str]] = None
 
 
 class Event(BaseModel):
@@ -174,6 +184,12 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
             all_texts.append(txt)
     all_texts.append(event.message.text)
     full_text = "\n".join(all_texts)
+
+    # Ensure defaults
+    if not event.message.sender:
+        event.message.sender = "unknown"
+    if not event.message.text:
+        event.message.text = "..."
 
     detection = detect_scam(event.message.text)
     extracted = extract_from_text(full_text)
