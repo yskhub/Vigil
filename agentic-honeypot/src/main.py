@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 import os
+import json
 import re
 import asyncio
 from contextlib import asynccontextmanager
@@ -176,16 +177,17 @@ def extract_from_text(text: str) -> Dict[str, List[str]]:
 @app.post("/events")
 async def handle_event(request: Request, x_api_key: Optional[str] = Header(None)):
     
-    # Raw body debug
+    # Force read body as bytes first to avoid any multipart/form-data parsing issues
+    body_bytes = await request.body()
     try:
-        body_bytes = await request.body()
-        logger.info(f"Incoming Body: {body_bytes.decode('utf-8')}")
-        body = await request.json()
-    except Exception as e:
-        logger.error(f"JSON Parse Error: {e}")
-        # Even if JSON is bad, we try to survive? No, usually 400. 
-        # But for 'Tester' issues, let's treat as empty dict if possible or return helpful error.
+        body = json.loads(body_bytes)
+    except:
+        # If decode fails, just assume empty dict
         body = {}
+    
+    # Log ensuring we see it
+    print(f"DEBUG BODY: {body}")
+
     
     # Manual Extraction
     event_id = body.get("sessionId", "unknown_session")
