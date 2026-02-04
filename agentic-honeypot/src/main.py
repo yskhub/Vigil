@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
+from starlette.requests import Request as StarletteRequest
+from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
@@ -174,35 +176,45 @@ def extract_from_text(text: str) -> Dict[str, List[str]]:
     }
 
 
-@app.post("/events")
-async def handle_event(request: Request, x_api_key: Optional[str] = Header(None)):
-    
-    # Force read body as bytes first to avoid any multipart/form-data parsing issues
-    body_bytes = await request.body()
+@app.post("/events", include_in_schema=False)
+async def handle_event_wrapper(request: Request):
+    """
+    Wrapper to manually handle the request and ensure we catch EVERYTHING
+    before FastAPI validation kicks in.
+    """
+    # Raw header check
+    x_api_key = request.headers.get("x-api-key")
+    if not x_api_key or not check_api_key(x_api_key):
+        # Return 401 manually
+        return JSONResponse({"detail": "Unauthorized: invalid x-api-key"}, status_code=401)
+        
     try:
-        body = json.loads(body_bytes)
+        body_bytes = await request.body()
+        if not body_bytes:
+            body = {}
+        else:
+            try:
+                body = json.loads(body_bytes)
+            except:
+                body = {}
     except:
-        # If decode fails, just assume empty dict
         body = {}
-    
-    # Log ensuring we see it
-    print(f"DEBUG BODY: {body}")
 
+    print(f"DEBUG INCOMING BODY: {body}")
     
+    # Delegate to internal logic
+    return await process_event_logic(body)
+
+async def process_event_logic(body: Dict[str, Any]):
     # Manual Extraction
     event_id = body.get("sessionId", "unknown_session")
     msg_obj = body.get("message", {})
     if not isinstance(msg_obj, dict):
-        # Handle case where message might be a string or something else
         msg_obj = {"text": str(msg_obj), "sender": "unknown"}
     
     msg_sender = str(msg_obj.get("sender") or "unknown")
     msg_text = str(msg_obj.get("text") or "")
     msg_ts = msg_obj.get("timestamp")
-
-    # Auth
-    if x_api_key is None or not check_api_key(x_api_key):
-        raise HTTPException(status_code=401, detail="Unauthorized: invalid x-api-key")
     if not rate_limit_ok(x_api_key):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
@@ -294,7 +306,7 @@ async def handle_event(request: Request, x_api_key: Optional[str] = Header(None)
         # persist agent reply
         await session_store.append_message(event_id, agent_reply)
 
-    response = {
+    response_data = {
         "status": "success",
         "reply": agent_reply["text"] if agent_reply else "No conversation started.",
         "scamDetected": detection["scam"],
@@ -307,9 +319,9 @@ async def handle_event(request: Request, x_api_key: Optional[str] = Header(None)
     }
 
     if agent_reply:
-        response["agentReply"] = agent_reply
+        response_data["agentReply"] = agent_reply
 
-    return response
+    return JSONResponse(response_data)
 
 
 @app.get("/health")
