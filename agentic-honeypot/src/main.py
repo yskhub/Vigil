@@ -174,17 +174,29 @@ def extract_from_text(text: str) -> Dict[str, List[str]]:
 
 
 @app.post("/events")
-async def handle_event(event: Event, request: Request, x_api_key: Optional[str] = Header(None)):
-    # Manual extraction if Pydantic conversion behaved oddly
-    msg_obj = event.message
-    if isinstance(msg_obj, dict):
-         msg_sender = msg_obj.get("sender", "unknown")
-         msg_text = msg_obj.get("text", "")
-         msg_ts = msg_obj.get("timestamp")
-    else:
-         msg_sender = str(msg_obj.sender) if msg_obj.sender else "unknown"
-         msg_text = str(msg_obj.text) if msg_obj.text else ""
-         msg_ts = msg_obj.timestamp
+async def handle_event(request: Request, x_api_key: Optional[str] = Header(None)):
+    
+    # Raw body debug
+    try:
+        body_bytes = await request.body()
+        logger.info(f"Incoming Body: {body_bytes.decode('utf-8')}")
+        body = await request.json()
+    except Exception as e:
+        logger.error(f"JSON Parse Error: {e}")
+        # Even if JSON is bad, we try to survive? No, usually 400. 
+        # But for 'Tester' issues, let's treat as empty dict if possible or return helpful error.
+        body = {}
+    
+    # Manual Extraction
+    event_id = body.get("sessionId", "unknown_session")
+    msg_obj = body.get("message", {})
+    if not isinstance(msg_obj, dict):
+        # Handle case where message might be a string or something else
+        msg_obj = {"text": str(msg_obj), "sender": "unknown"}
+    
+    msg_sender = str(msg_obj.get("sender") or "unknown")
+    msg_text = str(msg_obj.get("text") or "")
+    msg_ts = msg_obj.get("timestamp")
 
     # Auth
     if x_api_key is None or not check_api_key(x_api_key):
@@ -197,8 +209,11 @@ async def handle_event(event: Event, request: Request, x_api_key: Optional[str] 
     final_ts = normalize_timestamp(msg_ts)
 
     # Safe defaults for optional fields
-    conv_history = event.conversationHistory or []
-    meta = event.metadata or {}
+    conv_history = body.get("conversationHistory") or []
+    if not isinstance(conv_history, list): conv_history = []
+    
+    meta = body.get("metadata") or {}
+    if not isinstance(meta, dict): meta = {}
 
     # Combine latest message + conversation history for extraction
     all_texts = []
@@ -219,15 +234,15 @@ async def handle_event(event: Event, request: Request, x_api_key: Optional[str] 
     extracted = extract_from_text(full_text)
 
     # Persist incoming message to session store
-    await session_store.append_message(event.sessionId, {"sender": msg_sender, "text": msg_text, "timestamp": final_ts.isoformat()})
+    await session_store.append_message(event_id, {"sender": msg_sender, "text": msg_text, "timestamp": final_ts.isoformat()})
     # Merge any existing extracted intelligence
-    prev_extracted = await session_store.get_extracted(event.sessionId)
+    prev_extracted = await session_store.get_extracted(event_id)
     merged = {}
     for k in set(list(prev_extracted.keys()) + list(extracted.keys())):
         prev_list = prev_extracted.get(k, []) or []
         new_list = extracted.get(k, []) or []
         merged[k] = list(dict.fromkeys(prev_list + new_list))
-    await session_store.set_extracted(event.sessionId, merged)
+    await session_store.set_extracted(event_id, merged)
 
     # Basic engagement metrics (prototype)
     total_messages = len(conv_history) + 1
@@ -256,25 +271,14 @@ async def handle_event(event: Event, request: Request, x_api_key: Optional[str] 
     agent_reply = None
     if detection["scam"]:
         # fetch current history to pass to agent
-        local_history = await session_store.get_history(event.sessionId)
+        local_history = await session_store.get_history(event_id)
         
         # If local history is empty but we have provided history, hydrate it for context
         if not local_history and conv_history:
-             # Just use it temporarily for generating reply, don't necessarily persist old stuff to avoid duplication logic issues
-             # But we need to normalize it for the agent (who expects dicts with keys)
-             # The agent expects a list of dicts. event.conversationHistory IS a list of dicts.
              local_history = conv_history
 
         # Check if latest user message is already in history (idempotency check roughly)
-        # Note: If we just hydrated from event.conversationHistory, it doesn't include the current message yet.
-        # But for local_history from store, it might include it if we just appended it? 
-        # Wait, we called await session_store.append_message above. So local_history SHOULD include the new message.
-        # BUT if hydration happened, it means session_store was empty BEFORE we appended.
-        # So now session_store has [current_message].
-        # So local_history (from get_history) has [current_message].
-        # But we want PREVIOUS history too.
-        
-        if len(local_history) == 1 and local_history[0]["text"] == msg_text and conv_history:
+        if len(local_history) == 1 and local_history[0].get("text") == msg_text and conv_history:
              # Prepend the provided history
              full_history = conv_history + local_history
         else:
@@ -284,9 +288,9 @@ async def handle_event(event: Event, request: Request, x_api_key: Optional[str] 
         if not full_history:
              full_history = [{"sender": msg_sender, "text": msg_text, "timestamp": final_ts.isoformat()}]
 
-        agent_reply = await agent.generate_reply(event.sessionId, full_history, meta)
+        agent_reply = await agent.generate_reply(event_id, full_history, meta)
         # persist agent reply
-        await session_store.append_message(event.sessionId, agent_reply)
+        await session_store.append_message(event_id, agent_reply)
 
     response = {
         "status": "success",
