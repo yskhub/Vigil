@@ -176,6 +176,10 @@ def extract_from_text(text: str) -> Dict[str, List[str]]:
     }
 
 
+@app.options("/events", include_in_schema=False)
+async def handle_options_events(request: Request):
+    return JSONResponse({"status": "ok"})
+
 @app.post("/events", include_in_schema=False)
 async def handle_event_wrapper(request: Request):
     """
