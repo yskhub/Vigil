@@ -83,17 +83,31 @@ agent = AgentOrchestrator()
 
 # Request models
 class Message(BaseModel):
-    # Relax validation to allow any type/missing, handle in code
-    sender: Optional[str] = "unknown"
-    text: Optional[str] = ""
-    timestamp: Optional[Union[datetime, int, float, str]] = None
-
+    # Completely relaxed for debugging
+    sender: Optional[Any] = "unknown"
+    text: Optional[Any] = ""
+    timestamp: Optional[Any] = None
 
 class Event(BaseModel):
     sessionId: str
-    message: Message
+    message: Union[Message, Dict[str, Any]]
     conversationHistory: Optional[List[Dict[str, Any]]] = None
     metadata: Optional[Dict[str, Any]] = None
+
+# Custom Validation Error Handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    import logging
+    logger = logging.getLogger("agentic-honeypot")
+    body = await request.body()
+    logger.error(f"Validation Error: {exc.errors()} | Body: {body.decode('utf-8')}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": body.decode('utf-8')},
+    )
 
 
 class RotateKeysBody(BaseModel):
@@ -160,7 +174,18 @@ def extract_from_text(text: str) -> Dict[str, List[str]]:
 
 
 @app.post("/events")
-async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
+async def handle_event(event: Event, request: Request, x_api_key: Optional[str] = Header(None)):
+    # Manual extraction if Pydantic conversion behaved oddly
+    msg_obj = event.message
+    if isinstance(msg_obj, dict):
+         msg_sender = msg_obj.get("sender", "unknown")
+         msg_text = msg_obj.get("text", "")
+         msg_ts = msg_obj.get("timestamp")
+    else:
+         msg_sender = str(msg_obj.sender) if msg_obj.sender else "unknown"
+         msg_text = str(msg_obj.text) if msg_obj.text else ""
+         msg_ts = msg_obj.timestamp
+
     # Auth
     if x_api_key is None or not check_api_key(x_api_key):
         raise HTTPException(status_code=401, detail="Unauthorized: invalid x-api-key")
@@ -169,8 +194,7 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
 
     # Ensure incoming message has a timestamp; default to now if missing/empty
     # Ensure incoming message has a timestamp (handle int/float ms or s)
-    event.message.timestamp = normalize_timestamp(event.message.timestamp)
-
+    final_ts = normalize_timestamp(msg_ts)
 
     # Safe defaults for optional fields
     conv_history = event.conversationHistory or []
@@ -182,20 +206,20 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
         txt = msg.get("text") if isinstance(msg, dict) else None
         if txt:
             all_texts.append(txt)
-    all_texts.append(event.message.text)
+    all_texts.append(msg_text)
     full_text = "\n".join(all_texts)
 
     # Ensure defaults
-    if not event.message.sender:
-        event.message.sender = "unknown"
-    if not event.message.text:
-        event.message.text = "..."
+    if not msg_sender:
+        msg_sender = "unknown"
+    if not msg_text:
+        msg_text = "..."
 
-    detection = detect_scam(event.message.text)
+    detection = detect_scam(msg_text)
     extracted = extract_from_text(full_text)
 
     # Persist incoming message to session store
-    await session_store.append_message(event.sessionId, {"sender": event.message.sender, "text": event.message.text, "timestamp": event.message.timestamp.isoformat()})
+    await session_store.append_message(event.sessionId, {"sender": msg_sender, "text": msg_text, "timestamp": final_ts.isoformat()})
     # Merge any existing extracted intelligence
     prev_extracted = await session_store.get_extracted(event.sessionId)
     merged = {}
@@ -217,7 +241,7 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
                     timestamps.append(normalize_timestamp(t))
             except:
                 pass
-        timestamps.append(event.message.timestamp)
+        timestamps.append(final_ts)
         engagement_seconds = int((max(timestamps) - min(timestamps)).total_seconds()) if len(timestamps) > 1 else 0
     except Exception:
         engagement_seconds = 0
@@ -250,7 +274,7 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
         # So local_history (from get_history) has [current_message].
         # But we want PREVIOUS history too.
         
-        if len(local_history) == 1 and local_history[0]["text"] == event.message.text and conv_history:
+        if len(local_history) == 1 and local_history[0]["text"] == msg_text and conv_history:
              # Prepend the provided history
              full_history = conv_history + local_history
         else:
@@ -258,7 +282,7 @@ async def handle_event(event: Event, x_api_key: Optional[str] = Header(None)):
 
         # Fallback if somehow empty
         if not full_history:
-             full_history = [{"sender": event.message.sender, "text": event.message.text, "timestamp": event.message.timestamp.isoformat()}]
+             full_history = [{"sender": msg_sender, "text": msg_text, "timestamp": final_ts.isoformat()}]
 
         agent_reply = await agent.generate_reply(event.sessionId, full_history, meta)
         # persist agent reply
