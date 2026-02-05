@@ -71,7 +71,11 @@ async def _run_loop(stop_event: asyncio.Event):
             await evaluate_and_finalize()
         except Exception:
             pass
-        await asyncio.wait_for(stop_event.wait(), timeout=POLL_INTERVAL) if not stop_event.is_set() else None
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=POLL_INTERVAL)
+            break  # stop_event was set
+        except asyncio.TimeoutError:
+            continue  # timeout reached, continue loop
 
 
 def start_background_loop(loop):

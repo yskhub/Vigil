@@ -36,9 +36,6 @@ class SessionStore:
                 self._use_redis = False
         # fallback in-memory
         self._in_memory.setdefault(session_id, []).append(message)
-        self._in_memory.setdefault(session_id, [])
-        self._in_memory_extracted.setdefault(session_id, self._in_memory_extracted.get(session_id, {}))
-        self._in_memory.setdefault(session_id, self._in_memory.get(session_id, []))
         # update last seen time
         self._in_memory.setdefault("_last", {})
         self._in_memory["_last"][session_id] = __import__("time").time()

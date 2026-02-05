@@ -114,11 +114,3 @@ class AgentOrchestrator:
             "text": safe_text,
             "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
         }
-
-        safe_text = self._apply_guardrails(reply_text)
-
-        return {
-            "sender": "agent",
-            "text": safe_text,
-            "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
-        }

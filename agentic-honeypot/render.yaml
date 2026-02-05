@@ -9,8 +9,12 @@ services:
     envVars:
       - key: API_KEY
         fromSecret: API_KEY
+      - key: API_KEYS
+        value: Agentic_Honey_Pot_Scam_Detection_Intelligence_Extraction_2026_X1
       - key: REDIS_URL
         fromSecret: REDIS_URL
+      - key: OPENAI_API_KEY
+        fromSecret: OPENAI_API_KEY
       - key: LLM_PROVIDER
         value: mock
     healthCheckPath: /health

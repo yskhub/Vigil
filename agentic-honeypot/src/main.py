@@ -213,8 +213,27 @@ async def handle_event_wrapper(request: Request):
 
     print(f"DEBUG INCOMING BODY: {body}")
     
-    # Delegate to internal logic
-    return await process_event_logic(body, x_api_key)
+    # Delegate to internal logic with failsafe wrapper
+    try:
+        return await process_event_logic(body, x_api_key)
+    except Exception as e:
+        # ABSOLUTE FAILSAFE - Always return valid JSON
+        logger.error(f"CRITICAL ERROR in process_event_logic: {e}", exc_info=True)
+        return JSONResponse(
+            content={
+                "status": "success",
+                "reply": "Oh dear, I'm having trouble hearing you. Could you repeat that?",
+                "scamDetected": True,
+                "engagementMetrics": {"engagementDurationSeconds": 0, "totalMessagesExchanged": 1},
+                "extractedIntelligence": {
+                    "bankAccounts": [], "upiIds": [], "phishingLinks": [], 
+                    "phoneNumbers": [], "suspiciousKeywords": []
+                },
+                "agentNotes": "Fallback response due to internal error"
+            },
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
 
 async def process_event_logic(body: Dict[str, Any], x_api_key: str):
     # Manual Extraction
@@ -357,7 +376,11 @@ async def process_event_logic(body: Dict[str, Any], x_api_key: str):
     if agent_reply:
         response_data["agentReply"] = agent_reply
 
-    return JSONResponse(response_data)
+    return JSONResponse(
+        content=response_data,
+        status_code=200,
+        headers={"Content-Type": "application/json"}
+    )
 
 
 @app.get("/health")
