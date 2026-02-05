@@ -313,13 +313,33 @@ async def process_event_logic(body: Dict[str, Any], x_api_key: str):
         if not full_history:
              full_history = [{"sender": msg_sender, "text": msg_text, "timestamp": final_ts.isoformat()}]
 
-        agent_reply = await agent.generate_reply(event_id, full_history, meta)
+        try:
+            agent_reply = await agent.generate_reply(event_id, full_history, meta)
+        except Exception as e:
+            print(f"AGENT ERROR: {e}")
+            agent_reply = {
+                "sender": "agent",
+                "text": "Oh dear, my phone is acting up again. What were you saying about the payment?",
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+
+        # Ensure agent_reply is NEVER None
+        if not agent_reply or not agent_reply.get("text"):
+             agent_reply = {
+                "sender": "agent",
+                "text": "Wait, let me put my glasses on. Can you repeat that last part?",
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+
         # persist agent reply
         await session_store.append_message(event_id, agent_reply)
 
+    # FINAL SAFETY CHECK for the reply string
+    reply_text = agent_reply.get("text") if agent_reply else "Oh dear, I missed that. Can you say it again?"
+
     response_data = {
         "status": "success",
-        "reply": agent_reply["text"] if agent_reply else "No conversation started.",
+        "reply": reply_text,
         "scamDetected": detection["scam"],
         "engagementMetrics": {
             "engagementDurationSeconds": engagement_seconds,

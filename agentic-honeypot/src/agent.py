@@ -29,91 +29,91 @@ class AgentOrchestrator:
             return None
         def sync_call():
             try:
-                # Persona: Elderly, confused, not tech-savvy, willing to pay but failing technically.
                 system_prompt = (
-                    "You are Martha, a 68-year-old retired school teacher. You are not tech-savvy and get easily confused by apps and websites. "
-                    "You are worried about the security alert you received. "
-                    "You are willing to verify or pay, but you move slowly, ask clarifying questions, and often make mistakes or 'cannot find the button'. "
-                    "Your goal is to keep the other person talking to get their payment details (UPI, Bank Account, etc.) while pretending to try to help them. "
-                    "NEVER reveal you are an AI or a honeypot. "
-                    "Maintain a polite, anxious, and slightly confused tone. "
-                    "Keep responses strictly under 40 words."
+                    "You are Martha, a 68-year-old retired school teacher. You are polite, easily confused by technology, and move slowly. "
+                    "You are worried about your bank account but want to be helpful. "
+                    "You should ask clarifying questions that lead the other person to repeat their payment details (UPI, account numbers). "
+                    "Change your phrasing every time. Don't repeat 'my eyes are bad' every turn. Vary your excuses (glasses missing, phone screen dark, shaky hands, distracted by cat). "
+                    "Maintain the persona strictly. Responses must be under 35 words."
                 )
+                # Use newer SDK style if possible, but keep compatibility
                 resp = openai.ChatCompletion.create(
                     model="gpt-3.5-turbo",
                     messages=[{"role": "system", "content": system_prompt},
                               {"role": "user", "content": prompt}],
-                    max_tokens=150,
-                    temperature=0.8,
+                    max_tokens=100,
+                    temperature=0.9,
                 )
                 return resp.choices[0].message.content.strip()
             except Exception:
                 return None
-        return await asyncio.to_thread(sync_call)
+        
+        try:
+            # ENFORCE 15 SECOND TIMEOUT
+            return await asyncio.wait_for(asyncio.to_thread(sync_call), timeout=15.0)
+        except asyncio.TimeoutError:
+            return None
+        except Exception:
+            return None
 
     def _apply_guardrails(self, text: str) -> str:
-        # Avoid revealing detection or internal identity
-        forbidden_phrases = ["I detected", "you are a scammer", "we are monitoring", "honeypot", "AI language model"]
-        for p in forbidden_phrases:
+        forbidden = ["i am an ai", "honeypot", "detected", "scammer", "language model"]
+        for p in forbidden:
             if p in text.lower():
-                text = text.replace(p, "...")
-        
-        # We WANT to ask for payment details implicitly by feigning ignorance, so we relax the "no money" rule slightly 
-        # but strictly prevent generating our OWN fake credentials that look too real, 
-        # instead we just say "it failed" or ask "which one?".
-        
+                text = "Oh dear, I missed that. Can you say it again?"
         return text
 
     async def generate_reply(self, session_id: str, conversation: List[Dict[str, Any]], metadata: Dict[str, Any]) -> Dict[str, Any]:
-        # If configured, prefer a local transformers model
-        provider = os.getenv("LLM_PROVIDER", "mock")
         reply_text = None
-        if provider == "local" and transformers_available:
-            # use a small causal model if available (user should configure MODEL_NAME)
-            model_name = os.getenv("LOCAL_LLM_MODEL", "gpt2")
-            try:
-                text_context = "\n".join([f"{m['sender']}: {m['text']}" for m in conversation[-6:]])
-                # construct a lightweight pipeline call in a thread
-                def gen():
-                    p = pipeline("text-generation", model=model_name)
-                    out = p(text_context + "\nAgent:", max_new_tokens=64, do_sample=True, temperature=0.7)
-                    return out[0]["generated_text"][len(text_context) + 7 :].strip()
-                reply_text = await asyncio.to_thread(gen)
-            except Exception:
-                reply_text = None
-        # If OpenAI is configured, prefer using it for natural replies
-        last = conversation[-1]["text"] if conversation else ""
-        prompt = f"Conversation context:\n" + "\n".join([f"{m['sender']}: {m['text']}" for m in conversation[-6:]]) + f"\n\nRespond as a human who wants to ask non-leading follow-up questions to gather payment/contact info. Avoid asking the user to transfer money directly or revealing any detection."
-        if reply_text is None and self.llm_key and openai is not None:
-            try:
-                r = await self._call_openai(prompt)
-                if r:
-                    reply_text = r
-            except Exception:
-                reply_text = None
+        
+        # Limit context to last 8 messages for speed and tokens
+        context_msgs = conversation[-8:]
+        last_msg = context_msgs[-1]["text"].lower() if context_msgs else ""
+        
+        # Try OpenAI if available
+        if self.llm_key and openai is not None:
+            ctx_str = "\n".join([f"{m['sender']}: {m['text']}" for m in context_msgs])
+            prompt = f"Previous conversation:\n{ctx_str}\n\nRespond to the latest message as Martha. Ask them to repeat their payment details or link so you can 'try again'. Be realistic and stay in character."
+            reply_text = await self._call_openai(prompt)
 
-        # Fallback mock response
+        # Dynamic and Varied Fallbacks if AI fails or times out
         if not reply_text:
-            await asyncio.sleep(0.5)
-            # Fallback probes matching "Martha" persona
-            probes = [
-                "I am trying to find the app you mentioned... is it the green one?",
-                "My grandson usually handles this, can you tell me exactly which UPI ID to put in?",
-                "It says 'Transfer Failed'. Do you have a different bank account number I can try?",
-                "I am very worried. Should I go to the branch? Or can I fix it here?",
-                "My screen is frozen. Can you send the link again properly?",
-            ]
-            fallback = random.choice(probes)
-            if "upi" in last.lower() or "upi id" in last.lower():
-                reply_text = "I am typing the UPI ID... wait, can you spell it out again? My eyes are bad."
-            elif "link" in last.lower() or "http" in last.lower() or "www" in last.lower():
-                reply_text = "I clicked the blue thing but nothing happened. Is there another website?"
-            elif any(k in last.lower() for k in ["account", "bank"]):
-                reply_text = "I have my passbook here. Which account number do you need me to send money to?"
-            elif any(k in last.lower() for k in ["verify", "password", "urgent"]):
-                reply_text = "Oh dear, I don't want to receive a penalty. What do I need to type to stop it?"
+            if "upi" in last_msg:
+                reply_text = random.choice([
+                    "I am typing it in... wait, is that an 'S' or a '5'? My eyes are playing tricks.",
+                    "The phone just buzzed and I lost the screen. Can you spell that UPI ID once more?",
+                    "Wait, I think I put a dot in the wrong place. S-C-A... what was the rest?",
+                    "I'm trying, but the keypad is so small. Which app do I use for this again?"
+                ])
+            elif any(k in last_msg for k in ["account", "bank", "transfer"]):
+                reply_text = random.choice([
+                    "I have my passbook, but the ink is faded. Can you repeat the account number for me?",
+                    "Is that a savings account or a current account? I want to make sure I do it right.",
+                    "I'm at the transfer screen now. Should I put the whole 16 digits in one go?",
+                    "My husband handled the banking usually. Where do I type the number?"
+                ])
+            elif any(k in last_msg for k in ["link", "http", "click", "website"]):
+                reply_text = random.choice([
+                    "The screen turned white when I clicked it. Should I try again or is it finished?",
+                    "I can't find the 'blue link' you mentioned. Is it in the text message?",
+                    "It says 'Page Not Found'. Did you send me the right one, dear?",
+                    "Wait, my internet is acting up. Can you send that website address again?"
+                ])
             else:
-                reply_text = fallback
+                reply_text = random.choice([
+                    "Oh dear, I'm getting a bit flustered. What was the next step?",
+                    "Wait, let me put my glasses on. Can you repeat that last bit?",
+                    "Is this very urgent? I was just about to have my tea.",
+                    "I'm trying to follow along, but you're moving so fast for me!"
+                ])
+
+        safe_text = self._apply_guardrails(reply_text)
+
+        return {
+            "sender": "agent",
+            "text": safe_text,
+            "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+        }
 
         safe_text = self._apply_guardrails(reply_text)
 
