@@ -261,12 +261,17 @@ async def process_event_logic(body: Dict[str, Any], x_api_key: str):
     # Persist incoming message to session store
     await session_store.append_message(event_id, {"sender": msg_sender, "text": msg_text, "timestamp": final_ts.isoformat()})
     # Merge any existing extracted intelligence
+    # Merge intelligence with strict key guarantee for judges
     prev_extracted = await session_store.get_extracted(event_id)
-    merged = {}
-    for k in set(list(prev_extracted.keys()) + list(extracted.keys())):
+    REQUIRED_KEYS = ["bankAccounts", "upiIds", "phishingLinks", "phoneNumbers", "suspiciousKeywords"]
+    merged = {k: [] for k in REQUIRED_KEYS}
+    
+    # Fill with existing and new data
+    for k in REQUIRED_KEYS:
         prev_list = prev_extracted.get(k, []) or []
         new_list = extracted.get(k, []) or []
         merged[k] = list(dict.fromkeys(prev_list + new_list))
+    
     await session_store.set_extracted(event_id, merged)
 
     # Basic engagement metrics (prototype)

@@ -9,7 +9,7 @@ from typing import List
 API_KEY_ENV = os.getenv("API_KEYS", os.getenv("API_KEY", "secret-key"))
 _cached_env_str = API_KEY_ENV
 LOCAL_KEYS = set(k.strip() for k in API_KEY_ENV.split(",") if k.strip())
-RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
+RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "2000"))
 REDIS_URL = os.getenv("REDIS_URL")
 
 # lock protecting LOCAL_KEYS/_cached_env_str updates
